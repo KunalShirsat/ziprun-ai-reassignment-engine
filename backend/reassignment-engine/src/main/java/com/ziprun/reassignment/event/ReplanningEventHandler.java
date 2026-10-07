@@ -15,7 +15,7 @@ public class ReplanningEventHandler {
         this.replanningService = replanningService;
     }
 
-    @Async
+    @Async("virtualThreadTaskExecutor")
     @EventListener
     public void handleAgentOffline(AgentOfflineEvent event) {
         replanningService.replanOrdersForOfflineAgent(event.agentId());

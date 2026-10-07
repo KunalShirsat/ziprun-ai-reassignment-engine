@@ -11,7 +11,7 @@ When a delivery agent becomes unavailable, assigned orders need replacement reco
 | Routing | Spring `RoutingStrategy` implementations called through `RoutingEngine` |
 | Strategy selection | Runtime selection between `ruleBased` and `ai` |
 | Model access | `LLMGateway` abstraction with `LiteLlmGateway` provider adapter |
-| Long-running work | Spring asynchronous event handlers and persisted suggestion state |
+| Long-running work | Spring asynchronous event handlers, a dedicated Java 21 virtual-thread executor, and persisted suggestion state |
 | Assignment | Human approval; assignment and workload changes in one transaction |
 | Persistence | Spring Data JPA with H2 for the demo |
 
@@ -47,7 +47,7 @@ When a delivery agent becomes unavailable, assigned orders need replacement reco
 
 ## 4. Asynchronous INITIAL Suggestion Generation
 
-**Decision.** `POST /orders/{id}/suggest` persists a `PROCESSING` suggestion, publishes an event containing its ID, and returns HTTP 202. An `@Async` `@TransactionalEventListener` handles it after commit. `SuggestionGenerationService` reloads the row, calls the active strategy with INITIAL context, and updates the same suggestion ID to `PENDING`.
+**Decision.** `POST /orders/{id}/suggest` persists a `PROCESSING` suggestion, publishes an event containing its ID, and returns HTTP 202. An `@Async("virtualThreadTaskExecutor")` `@TransactionalEventListener` handles it after commit. `SuggestionGenerationService` reloads the row, calls the active strategy with INITIAL context, and updates the same suggestion ID to `PENDING`.
 
 **Alternatives considered.** Wait for the LLM synchronously in the HTTP request, or persist work to an external queue.
 
@@ -55,9 +55,17 @@ When a delivery agent becomes unavailable, assigned orders need replacement reco
 
 **Trade-offs.** The in-process asynchronous worker is simple and needs no broker, but work is not durable across a process crash. An unexpected worker failure is logged and can leave the suggestion PROCESSING; there is no persistent queue, automatic retry, or FAILED state.
 
+### Java 21 Virtual Thread Executor
+
+**Decision.** Both asynchronous workflow handlers explicitly use the Spring `virtualThreadTaskExecutor` bean. It adapts an `ExecutorService` created with `Executors.newVirtualThreadPerTaskExecutor()`; Spring manages the underlying executor bean and closes it during application shutdown.
+
+**Why this approach.** The default asynchronous executor is not retained for these workflows: an explicitly qualified executor makes the execution choice clear and gives blocking LLM/HTTP and database waits a lightweight thread-per-task model. This uses Java 21 intentionally for the application's I/O-heavy asynchronous work, rather than as a demonstration-only feature.
+
+**Trade-offs.** Virtual Threads can improve concurrency for blocking workloads; they do not make CPU-bound work faster. A per-task executor does not impose a concurrency limit, so increased simultaneous work can also increase pressure on the LLM provider and database.
+
 ## 5. AGENT_OFFLINE Event-Driven Replanning
 
-**Decision.** A newly OFFLINE agent status causes `AgentService` to publish `AgentOfflineEvent`. The `@Async` `ReplanningEventHandler` calls `ReplanningService`, which finds that agent's still-ASSIGNED orders, obtains currently AVAILABLE candidates, invokes the active `RoutingEngine` with `AGENT_OFFLINE`, and persists a pending suggestion. Operations staff decide whether to accept it.
+**Decision.** A newly OFFLINE agent status causes `AgentService` to publish `AgentOfflineEvent`. The `@Async("virtualThreadTaskExecutor")` `ReplanningEventHandler` calls `ReplanningService`, which finds that agent's still-ASSIGNED orders, obtains currently AVAILABLE candidates, invokes the active `RoutingEngine` with `AGENT_OFFLINE`, and persists a pending suggestion. Operations staff decide whether to accept it.
 
 **Alternatives considered.** Perform all replanning synchronously inside `PATCH /agents/{id}/status`; periodically poll for offline agents; or publish events to an external broker.
 

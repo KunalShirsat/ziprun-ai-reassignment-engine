@@ -20,7 +20,7 @@ public class SuggestionGenerationEventHandler {
         this.suggestionGenerationService = suggestionGenerationService;
     }
 
-    @Async
+    @Async("virtualThreadTaskExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void handle(SuggestionGenerationRequestedEvent event) {
         try {
