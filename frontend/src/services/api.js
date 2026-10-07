@@ -31,6 +31,12 @@ async function request(path, options = {}) {
 export const api = {
   getAgents: () => request("/agents"),
   getOrders: () => request("/orders"),
+  getRoutingStrategy: () => request("/routing/strategy"),
+  updateRoutingStrategy: (strategy) =>
+    request("/routing/strategy", {
+      method: "PATCH",
+      body: JSON.stringify({ strategy }),
+    }),
   getActiveSuggestions: async () => {
     const suggestions = await request("/suggestions");
     return suggestions.filter(

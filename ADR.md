@@ -1,109 +1,112 @@
-# ADR — AI Reassignment Engine Architecture
+# ADR — ZipRun AI Reassignment Engine
 
 ## Context
 
-Delivery orders can be put at risk when an assigned agent goes offline. ZipRun identifies affected orders, recommends available replacement agents, and leaves the final assignment decision to operations.
+When a delivery agent becomes unavailable, assigned orders need replacement recommendations without removing operations staff from the decision. The project was built for a five-hour solo hackathon: the design favors a demonstrable, small Spring application and in-process asynchronous work over additional infrastructure.
 
-The project targets a five-hour hackathon demo. It favors small interfaces, an in-memory database, asynchronous work without additional infrastructure, and a human approval step over production-scale optimization and operations.
+## Decision Summary
 
-## Decision 1 — Routing strategy abstraction
+| Area | Chosen approach |
+| --- | --- |
+| Routing | Spring `RoutingStrategy` implementations called through `RoutingEngine` |
+| Strategy selection | Runtime selection between `ruleBased` and `ai` |
+| Model access | `LLMGateway` abstraction with `LiteLlmGateway` provider adapter |
+| Long-running work | Spring asynchronous event handlers and persisted suggestion state |
+| Assignment | Human approval; assignment and workload changes in one transaction |
+| Persistence | Spring Data JPA with H2 for the demo |
 
-Routing behavior is represented by the `RoutingStrategy` interface and invoked through `RoutingEngine`:
+## 1. Routing Strategy Abstraction
 
-```text
-RoutingEngine
-  -> current strategy
-       -> RuleBasedRoutingStrategy
-       -> AiRoutingStrategy
-```
+**Decision.** `RoutingStrategy` defines recommendation behavior. `RuleBasedRoutingStrategy` ranks available agents by current `activeOrderCount`; `AiRoutingStrategy` requests and validates an AI recommendation and falls back to rule-based routing when needed. `RoutingEngine` is the common entry point for INITIAL and AGENT_OFFLINE decisions and delegates to the active implementation.
 
-Both INITIAL suggestion generation and AGENT_OFFLINE replanning call `RoutingEngine` with the trigger context. This keeps strategy choice out of the workflows and lets another Spring-managed implementation be added under a registered strategy name.
+**Alternatives considered.** Put routing logic directly in controllers or workflow services; select between implementations using a large conditional; or choose a strategy only once at application startup.
 
-The rule-based implementation orders available agents by `activeOrderCount`, lowest first. It is intentionally simple and does not optimize geography or travel time.
+**Why this approach.** Separate Spring-managed implementations keep routing policy out of request and event workflows. A common entry point lets those workflows use the same routing contract and makes another strategy possible without rewriting the callers. Runtime selection also supports comparison and switching during a demo.
 
-## Decision 2 — Runtime strategy selection
+**Trade-offs.** There are more types and a small amount of strategy-registration/configuration state than a single conditional would require. The rule-based policy uses workload only; it does not optimize location or travel time.
 
-`RoutingEngine` receives Spring-managed strategies by name. `routing.strategy=ruleBased` sets the startup default. The active strategy can also be changed at runtime using `PATCH /routing/strategy` with `{"strategy":"ai"}` or `{"strategy":"ruleBased"}`. The controller rejects unknown names with HTTP 400. The new selection applies to subsequent recommendations and does not require restart.
+## 2. Runtime Strategy Switching
 
-## Decision 3 — AI gateway and credential configuration
+**Decision.** `routing.strategy` sets the startup strategy, and `PATCH /routing/strategy` switches the active strategy at runtime between `ruleBased` and `ai`. `GET /routing/strategy` reports the same active value held by `RoutingEngine`; unknown strategy names are rejected.
 
-`LLMGateway` separates model/provider access from routing and validation. `LiteLlmGateway` implements the OpenAI-compatible LiteLLM chat-completions call using configured endpoint, model, product header, and HTTP timeouts. It returns only the model’s textual content; `AiRoutingStrategy` owns parsing and validation.
+**Why this approach.** Switching without restart supports experimentation, gives operators a visible demo control, and makes it straightforward to compare AI recommendations with the deterministic rule-based policy. The AI strategy also uses that rule-based policy as its fallback. Additional registered strategies can use the same selection mechanism.
 
-The API credential is resolved from the `LITELLM_API_KEY` environment variable through Spring configuration. It is not included in the project configuration as a literal and must not be committed or logged. AI is not selected by default; the default strategy is `ruleBased`.
+**Alternatives considered.** Require a restart or deployment change to select a strategy, or use configuration only at application startup.
 
-## Decision 4 — AI validation and rule-based fallback
+**Trade-offs.** Runtime switching adds a small amount of mutable strategy state and UI/API configuration. A switch affects subsequent routing calls; it does not change recommendations already persisted.
 
-AI recommendations are used only when the response contains a nonblank `agentId`, a finite `confidence` from 0 through 1, and nonblank `reasoning`, and the selected ID belongs to the available-agent list.
+## 3. AI Gateway Separation
 
-If the credential is missing, the provider request fails or times out, the response is empty or malformed, or the recommendation fails validation, `AiRoutingStrategy` logs a sanitized warning and falls back to `RuleBasedRoutingStrategy`. Logs do not include the credential, prompt, or full model response.
+**Decision.** Provider HTTP access belongs to `LiteLlmGateway`, behind `LLMGateway`. `PromptBuilder` constructs the trigger-specific prompt. `AiRoutingStrategy` parses and validates the returned model text, selects the candidate recommendation, and invokes the rule-based fallback when necessary. Workflow services call the routing abstraction rather than implementing provider access.
 
-## Decision 5 — Asynchronous INITIAL suggestion generation
+**Alternatives considered.** Call LiteLLM directly from `AiRoutingStrategy`, or put provider-specific HTTP and credential behavior in business services.
 
-`POST /orders/{id}/suggest` persists a suggestion with status PROCESSING, neutral confidence, no recommended agent, and processing text, then returns HTTP 202. It does not wait for model generation.
+**Why this approach.** The gateway owns endpoint, model, headers, credentials, timeouts, and provider response extraction. Keeping those details out of routing policy and business workflows makes the application flow testable with a mocked gateway and avoids coupling workflow code to LiteLLM's transport format.
 
-The request publishes an event containing the suggestion ID. An `@Async @TransactionalEventListener(AFTER_COMMIT)` handler runs only after the placeholder transaction commits. The worker reloads the row in its own transaction, invokes the currently active strategy with INITIAL context, and updates that same row to PENDING with the recommendation fields. This avoids passing a managed JPA entity to the asynchronous thread. A PROCESSING suggestion cannot be accepted or rejected.
+**Trade-offs.** The gateway interface and adapter add a small layer of indirection. The current adapter is LiteLLM-specific; a different provider would require another implementation and configuration.
 
-AI failures handled by the strategy’s fallback still produce a PENDING rule-based recommendation. An unexpected worker failure is safely logged; there is no FAILED status or automatic retry, so such a row may remain PROCESSING.
+## 4. Asynchronous INITIAL Suggestion Generation
 
-## Decision 6 — Asynchronous AGENT_OFFLINE replanning
+**Decision.** `POST /orders/{id}/suggest` persists a `PROCESSING` suggestion, publishes an event containing its ID, and returns HTTP 202. An `@Async` `@TransactionalEventListener` handles it after commit. `SuggestionGenerationService` reloads the row, calls the active strategy with INITIAL context, and updates the same suggestion ID to `PENDING`.
 
-When an agent newly transitions to OFFLINE, `AgentService` saves the status and publishes an `AgentOfflineEvent`. The `@Async` event handler invokes `ReplanningService`, which finds orders still ASSIGNED to that agent. Each order is routed through `RoutingEngine` with AGENT_OFFLINE context and produces a PENDING AGENT_OFFLINE suggestion. The status PATCH does not wait for this work.
+**Alternatives considered.** Wait for the LLM synchronously in the HTTP request, or persist work to an external queue.
 
-The service checks for an existing pending AGENT_OFFLINE suggestion before creating one and handles an order’s runtime failure without stopping the remaining loop. This check is not a database uniqueness guarantee under simultaneous concurrent events. Routing through AI retains the same rule-based fallback.
+**Why this approach.** Synchronous generation would put variable external LLM latency and availability on the request critical path. Persisting the placeholder first isolates that latency from the response and lets the UI show a user-visible PROCESSING state while generation continues.
 
-## Decision 7 — Prompt context
+**Trade-offs.** The in-process asynchronous worker is simple and needs no broker, but work is not durable across a process crash. An unexpected worker failure is logged and can leave the suggestion PROCESSING; there is no persistent queue, automatic retry, or FAILED state.
 
-INITIAL and AGENT_OFFLINE recommendations have different contexts and use separate prompt-building paths. Prompts include order ID and description plus available agents’ IDs, names, and active-order counts. Suggestions persist whether the trigger was INITIAL or AGENT_OFFLINE.
+## 5. AGENT_OFFLINE Event-Driven Replanning
 
-## Decision 8 — Persistence and assignment consistency
+**Decision.** A newly OFFLINE agent status causes `AgentService` to publish `AgentOfflineEvent`. The `@Async` `ReplanningEventHandler` calls `ReplanningService`, which finds that agent's still-ASSIGNED orders, obtains currently AVAILABLE candidates, invokes the active `RoutingEngine` with `AGENT_OFFLINE`, and persists a pending suggestion. Operations staff decide whether to accept it.
 
-Spring Data JPA persists agents, orders, and suggestions. H2 in-memory storage keeps local setup simple and is not intended for production.
+**Alternatives considered.** Perform all replanning synchronously inside `PATCH /agents/{id}/status`; periodically poll for offline agents; or publish events to an external broker.
 
-Suggestions use PROCESSING, PENDING, ACCEPTED, and REJECTED statuses. A recommendation does not change an order until accepted. Acceptance updates the suggestion, changes the order’s assigned agent and status to REASSIGNED, and adjusts the previous and recommended agents’ `activeOrderCount` values within the same transaction. If the two agents are the same, the count is not changed. Rejection leaves the order assignment and counts unchanged.
+**Why this approach.** In-process event handling returns the status response without waiting for planning, reacts directly to the status transition, and adds no infrastructure or operational setup—appropriate for the hackathon demo. Per-order runtime failures are logged so the loop can continue with other affected orders. A pending-suggestion check avoids ordinary repeat suggestions.
 
-Startup demo data provides five agents and eight ASSIGNED orders with matching initial load counts and creates no suggestions. The initializer skips seeding when either A1 or O1 already exists.
+**Trade-offs.** The event is not durably queued and can be lost on process failure, unlike a persistent broker message. The duplicate check is not an atomic uniqueness guarantee under concurrent events. This design is asynchronous in-process replanning, not a distributed workflow engine.
 
-## Decision 9 — Frontend polling and human approval
+## 6. AI Failure and Rule-Based Fallback
 
-The React dashboard polls agents, orders, and PROCESSING/PENDING suggestions every four seconds. PROCESSING suggestions are shown as generating and have no decision buttons; PENDING suggestions show the recommendation, confidence, reasoning, and trigger and allow accept/reject actions. Polling was chosen over WebSockets or Server-Sent Events to avoid additional infrastructure.
+**Decision.** The AI path accepts a recommendation only after validating the response shape and required fields, confidence range, nonblank values, and that the selected agent is in the current available-candidate list. On an empty response, malformed output, provider error/timeout, or invalid recommendation, `AiRoutingStrategy` logs a sanitized warning and delegates to `RuleBasedRoutingStrategy`.
 
-Human approval is required for both initial and offline recommendations:
+**Alternatives considered.** Fail the suggestion workflow whenever the model fails, or accept model output without application validation.
 
-```text
-PROCESSING -> PENDING -> ACCEPTED -> order becomes REASSIGNED
-                      -> REJECTED -> assignment unchanged
-```
+**Why this approach.** Reassignment recommendations remain available when an external model is unavailable or returns unusable output, while validation prevents an arbitrary or unavailable agent from being used.
 
-## Deliberate exclusions
+**Trade-offs.** Fallback preserves operational continuity but means a recommendation created while AI mode is selected may be rule-based. The current suggestion contract does not separately expose whether fallback produced an individual recommendation.
 
-The implementation intentionally does not include:
+## 7. Human-in-the-Loop Approval
 
-- Authentication or authorization
-- A production database or durable event/message broker
-- WebSockets, Server-Sent Events, or push notifications
-- Geospatial or travel-time routing optimization
-- Sophisticated agent memory
-- Automatic retries or a FAILED state for unexpected INITIAL worker failures
-- Database-enforced uniqueness for active suggestions under concurrent requests
+**Decision.** Routing creates a suggestion; it does not automatically change the order assignment. The system validates and persists a pending recommendation, then a human accepts or rejects it. Acceptance performs reassignment; rejection leaves the assignment unchanged.
 
-These exclusions keep the demo focused on recommendations, asynchronous replanning, and operations approval.
+**Alternatives considered.** Automatically apply the highest-ranked recommendation without operator review.
 
-## Consequences
+**Why this approach.** Delivery reassignment affects live operations. Keeping the operator in control makes the recommendation reviewable before the assignment changes and fits the dashboard's explicit decision flow.
 
-### Positive
+**Trade-offs.** This adds a human action and delays reassignment compared with full automation. It favors safety and control over an autonomous end-to-end assignment.
 
-- Callers use one routing abstraction and can switch between registered strategies at runtime.
-- INITIAL LLM generation does not block the HTTP request, and its persisted row is updated in place.
-- AI output is validated before use; rule-based routing preserves a recommendation path when the AI cannot provide a valid result.
-- Offline replanning is asynchronous and isolates failures by order.
-- Human approval controls reassignment, and agent workload counts stay consistent with accepted assignment changes.
+## 8. Active Order Count Consistency
 
-### Trade-offs
+**Decision.** On acceptance, `SuggestionService` updates the previous agent's `activeOrderCount`, the recommended agent's `activeOrderCount`, the order assignment, the order status (`REASSIGNED`), and the suggestion status (`ACCEPTED`) within the same transaction. If the old and new agent are the same, counts are unchanged.
 
-- Rule-based routing uses workload only.
-- Polling introduces up to a short delay before updates appear.
-- In-process asynchronous events are not durable across application failure.
-- A worker failure outside the normal AI fallback is logged but can leave a suggestion PROCESSING.
-- The duplicate check is not atomic under concurrent requests.
-- H2 is suitable for this local demo, not production persistence.
-- AI requires an externally supplied `LITELLM_API_KEY` and is not selected by default.
+**Alternatives considered.** Recompute loads later, or update counts separately from the order assignment.
+
+**Why this approach.** The dashboard and subsequent routing decisions use active counts as workload evidence. Updating the assignment and the corresponding counts together avoids an accepted reassignment leaving the displayed and routing workload out of sync.
+
+**Trade-offs.** The transaction keeps these updates atomic within this application/database, but does not provide distributed coordination for concurrent assignments.
+
+## Testing / Verification
+
+The backend uses unit tests for routing, prompt construction, gateway behavior, and services, plus Spring integration tests that exercise HTTP endpoints and persistence. The AGENT_OFFLINE integration test drives the status and acceptance APIs, uses a mocked `LLMGateway`, and awaits asynchronous suggestion persistence with Awaitility. Gateway tests mock provider HTTP; a real LiteLLM call has been verified separately from the automated suite. The frontend has been verified with a Vite production build; no frontend component-test framework is configured. The latest recorded clean backend suite had 50 passing tests and no failures or errors.
+
+## Deliberate Exclusions
+
+Within the five-hour solo hackathon constraint, the project does not implement:
+
+- A durable external event broker or persistent job queue.
+- A distributed workflow engine or advanced autonomous-agent orchestration.
+- Production-grade distributed locking or database-enforced atomic duplicate prevention.
+- A frontend component-test framework.
+- Geospatial or travel-time routing optimization.
+
+These are consciously outside the demo's scope; the implemented in-process handlers, available-agent filtering, rule-based fallback, and human approval cover the demonstration workflow without them.

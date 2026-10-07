@@ -1,4 +1,4 @@
 package com.ziprun.reassignment.ai;
 
-public record AIResponse(String agentId, double confidence, String reasoning) {
+public record AIResponse(String agentId, Double confidence, String reasoning) {
 }

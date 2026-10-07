@@ -14,6 +14,9 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busyKey, setBusyKey] = useState("");
+  const [routingStrategy, setRoutingStrategy] = useState("");
+  const [strategyLoading, setStrategyLoading] = useState(true);
+  const [strategyError, setStrategyError] = useState("");
   const refreshInProgress = useRef(false);
 
   const refreshData = useCallback(async (showLoading = false) => {
@@ -47,6 +50,28 @@ export default function App() {
     return () => window.clearInterval(intervalId);
   }, [refreshData]);
 
+  useEffect(() => {
+    let active = true;
+    api.getRoutingStrategy()
+      .then(({ strategy }) => {
+        if (!active) return;
+        if (strategy !== "ai" && strategy !== "ruleBased") {
+          throw new Error("The backend returned an unknown routing strategy.");
+        }
+        setRoutingStrategy(strategy);
+        setStrategyError("");
+      })
+      .catch((strategyLoadError) => {
+        if (active) setStrategyError(strategyLoadError.message || "Could not load the routing strategy.");
+      })
+      .finally(() => {
+        if (active) setStrategyLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const pendingOrderIds = useMemo(
     () => new Set(suggestions.map((suggestion) => suggestion.orderId)),
     [suggestions],
@@ -55,6 +80,9 @@ export default function App() {
     () => suggestions.filter((suggestion) => suggestion.status === "PENDING").length,
     [suggestions],
   );
+  const strategyLabel = routingStrategy === "ai"
+    ? "AI"
+    : routingStrategy === "ruleBased" ? "Rule-based" : "Unavailable";
 
   async function changeAgentStatus(agentId, status) {
     const key = `agent:${agentId}`;
@@ -97,9 +125,56 @@ export default function App() {
     }
   }
 
+  async function changeRoutingStrategy(strategy) {
+    setStrategyLoading(true);
+    setStrategyError("");
+    try {
+      const response = await api.updateRoutingStrategy(strategy);
+      if (response.strategy !== "ai" && response.strategy !== "ruleBased") {
+        throw new Error("The backend returned an unknown routing strategy.");
+      }
+      setRoutingStrategy(response.strategy);
+    } catch (actionError) {
+      setStrategyError(actionError.message || "Could not change the routing strategy.");
+    } finally {
+      setStrategyLoading(false);
+    }
+  }
+
   return (
     <main className="dashboard">
       <Header agentCount={agents.length} orderCount={orders.length} pendingCount={pendingSuggestionCount} />
+
+      <section className="routing-strategy" aria-labelledby="routing-strategy-title">
+        <div className="routing-strategy-copy">
+          <p className="eyebrow">LIVE ROUTING</p>
+          <h2 id="routing-strategy-title">Routing Strategy</h2>
+          {routingStrategy === "ai" && (
+            <p className="strategy-description">New recommendations use the AI routing path.</p>
+          )}
+        </div>
+        <div className="strategy-control">
+          <label htmlFor="routing-strategy-select">
+            Current strategy: <strong>{strategyLabel}</strong>
+          </label>
+          <select
+            id="routing-strategy-select"
+            value={routingStrategy}
+            disabled={strategyLoading || !routingStrategy}
+            onChange={(event) => changeRoutingStrategy(event.target.value)}
+            aria-busy={strategyLoading}
+          >
+            <option value="ai">AI</option>
+            <option value="ruleBased">Rule-based</option>
+          </select>
+          {strategyLoading && (
+            <span className="strategy-loading" role="status">
+              {routingStrategy ? "Switching strategy…" : "Loading strategy…"}
+            </span>
+          )}
+          {strategyError && <span className="strategy-error" role="alert">{strategyError}</span>}
+        </div>
+      </section>
 
       {error && (
         <div className="error-banner" role="alert">

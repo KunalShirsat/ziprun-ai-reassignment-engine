@@ -1,5 +1,6 @@
 package com.ziprun.reassignment.controller;
 
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -19,6 +20,11 @@ public class RoutingController {
 
     public RoutingController(RoutingEngine routingEngine) {
         this.routingEngine = routingEngine;
+    }
+
+    @GetMapping("/strategy")
+    public RoutingStrategyResponse getStrategy() {
+        return new RoutingStrategyResponse(routingEngine.getActiveStrategyName());
     }
 
     @PatchMapping("/strategy")

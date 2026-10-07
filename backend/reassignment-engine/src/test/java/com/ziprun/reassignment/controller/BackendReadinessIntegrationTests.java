@@ -132,6 +132,35 @@ class BackendReadinessIntegrationTests {
     }
 
     @Test
+    void routingStrategyEndpointsReadAndSwitchTheActiveStrategy() throws Exception {
+        String originalStrategy = routingEngine.getActiveStrategyName();
+        try {
+            HttpResponse<String> initialResponse = send("GET", "/routing/strategy", null);
+            org.junit.jupiter.api.Assertions.assertEquals(200, initialResponse.statusCode());
+            org.junit.jupiter.api.Assertions.assertEquals(
+                    originalStrategy,
+                    objectMapper.readTree(initialResponse.body()).path("strategy").asText());
+
+            HttpResponse<String> switchResponse = send(
+                    "PATCH",
+                    "/routing/strategy",
+                    "{\"strategy\":\"ai\"}");
+            org.junit.jupiter.api.Assertions.assertEquals(200, switchResponse.statusCode());
+            org.junit.jupiter.api.Assertions.assertEquals(
+                    "ai",
+                    objectMapper.readTree(switchResponse.body()).path("strategy").asText());
+
+            HttpResponse<String> refreshedResponse = send("GET", "/routing/strategy", null);
+            org.junit.jupiter.api.Assertions.assertEquals(200, refreshedResponse.statusCode());
+            org.junit.jupiter.api.Assertions.assertEquals(
+                    "ai",
+                    objectMapper.readTree(refreshedResponse.body()).path("strategy").asText());
+        } finally {
+            routingEngine.switchStrategy(originalStrategy);
+        }
+    }
+
+    @Test
     void suggestEndpointReturnsProcessingSuggestionAndLeavesOrderAssigned() throws Exception {
         Agent assignedAgent = agent("IT-ASSIGNED", AgentStatus.BUSY);
         Agent availableAgent = agent("IT-AVAILABLE", AgentStatus.AVAILABLE);
@@ -234,6 +263,108 @@ class BackendReadinessIntegrationTests {
         org.junit.jupiter.api.Assertions.assertEquals(
                 AgentStatus.OFFLINE,
                 agentRepository.findById(agent.getId()).orElseThrow().getStatus());
+    }
+
+    @Test
+    void agentOfflineHttpWorkflowCreatesAndAcceptsReassignmentSuggestion() throws Exception {
+        String originalStrategy = routingEngine.getActiveStrategyName();
+        Agent offlineAgent = agent("IT-E2E-OFFLINE-AGENT", AgentStatus.AVAILABLE);
+        offlineAgent.setActiveOrderCount(1);
+        Agent replacementAgent = agent("IT-E2E-REPLACEMENT", AgentStatus.AVAILABLE);
+        replacementAgent.setActiveOrderCount(2);
+        agentRepository.saveAll(java.util.List.of(offlineAgent, replacementAgent));
+
+        String affectedOrderId = "IT-E2E-OFFLINE-ORDER";
+        orderRepository.save(order(affectedOrderId, offlineAgent));
+        int offlineAgentInitialCount = agentRepository.findById(offlineAgent.getId())
+                .orElseThrow().getActiveOrderCount();
+        int replacementAgentInitialCount = agentRepository.findById(replacementAgent.getId())
+                .orElseThrow().getActiveOrderCount();
+        var availableReplacementIds = agentRepository.findByStatus(AgentStatus.AVAILABLE).stream()
+                .map(Agent::getId)
+                .filter(id -> !offlineAgent.getId().equals(id))
+                .collect(java.util.stream.Collectors.toSet());
+        org.junit.jupiter.api.Assertions.assertTrue(availableReplacementIds.contains(replacementAgent.getId()));
+
+        when(llmGateway.generate(anyString())).thenReturn("""
+                {"agentId":"IT-E2E-REPLACEMENT","confidence":0.91,"reasoning":"Selected from the available replacements."}
+                """);
+        routingEngine.switchStrategy("ai");
+        try {
+            CompletableFuture<HttpResponse<String>> statusRequest = CompletableFuture.supplyAsync(() -> {
+                try {
+                    return send(
+                            "PATCH",
+                            "/agents/" + offlineAgent.getId() + "/status",
+                            "{\"status\":\"OFFLINE\"}");
+                } catch (IOException | InterruptedException exception) {
+                    throw new IllegalStateException(exception);
+                }
+            });
+            HttpResponse<String> statusResponse = statusRequest.get(3, TimeUnit.SECONDS);
+            JsonNode statusBody = objectMapper.readTree(statusResponse.body());
+            org.junit.jupiter.api.Assertions.assertEquals(200, statusResponse.statusCode());
+            org.junit.jupiter.api.Assertions.assertEquals("OFFLINE", statusBody.path("status").asText());
+
+            Awaitility.await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                    org.junit.jupiter.api.Assertions.assertTrue(
+                            suggestionRepository.existsPendingByOrderIdAndTriggerReason(
+                                    affectedOrderId,
+                                    TriggerReason.AGENT_OFFLINE)));
+
+            ReassignmentSuggestion persistedSuggestion = suggestionRepository
+                    .findFirstByOrder_IdAndStatusAndTriggerReason(
+                            affectedOrderId,
+                            SuggestionStatus.PENDING,
+                            TriggerReason.AGENT_OFFLINE)
+                    .orElseThrow();
+            Agent persistedReplacement = persistedSuggestion.getRecommendedAgent();
+            org.junit.jupiter.api.Assertions.assertEquals(TriggerReason.AGENT_OFFLINE,
+                    persistedSuggestion.getTriggerReason());
+            org.junit.jupiter.api.Assertions.assertEquals(SuggestionStatus.PENDING,
+                    persistedSuggestion.getStatus());
+            org.junit.jupiter.api.Assertions.assertEquals(affectedOrderId,
+                    persistedSuggestion.getOrder().getId());
+            org.junit.jupiter.api.Assertions.assertTrue(availableReplacementIds.contains(persistedReplacement.getId()));
+            org.junit.jupiter.api.Assertions.assertNotEquals(offlineAgent.getId(), persistedReplacement.getId());
+            org.junit.jupiter.api.Assertions.assertEquals(AgentStatus.AVAILABLE, persistedReplacement.getStatus());
+            org.junit.jupiter.api.Assertions.assertTrue(persistedSuggestion.getConfidence() >= 0.0
+                    && persistedSuggestion.getConfidence() <= 1.0);
+            org.junit.jupiter.api.Assertions.assertFalse(persistedSuggestion.getReasoning().isBlank());
+            int recommendedAgentInitialCount = agentRepository.findById(persistedReplacement.getId())
+                    .orElseThrow().getActiveOrderCount();
+
+            HttpResponse<String> acceptResponse = send(
+                    "PATCH",
+                    "/suggestions/" + persistedSuggestion.getId(),
+                    "{\"status\":\"ACCEPTED\"}");
+            org.junit.jupiter.api.Assertions.assertEquals(200, acceptResponse.statusCode());
+            org.junit.jupiter.api.Assertions.assertEquals(
+                    "ACCEPTED",
+                    objectMapper.readTree(acceptResponse.body()).path("status").asText());
+
+            Order reassignedOrder = orderRepository.findById(affectedOrderId).orElseThrow();
+            org.junit.jupiter.api.Assertions.assertEquals(OrderStatus.REASSIGNED, reassignedOrder.getStatus());
+            org.junit.jupiter.api.Assertions.assertEquals(
+                    persistedReplacement.getId(), reassignedOrder.getAssignedAgent().getId());
+            org.junit.jupiter.api.Assertions.assertNotEquals(
+                    offlineAgent.getId(), reassignedOrder.getAssignedAgent().getId());
+            org.junit.jupiter.api.Assertions.assertEquals(
+                    offlineAgentInitialCount - 1,
+                    agentRepository.findById(offlineAgent.getId()).orElseThrow().getActiveOrderCount());
+            org.junit.jupiter.api.Assertions.assertEquals(
+                    recommendedAgentInitialCount + 1,
+                    agentRepository.findById(persistedReplacement.getId()).orElseThrow().getActiveOrderCount());
+            org.junit.jupiter.api.Assertions.assertEquals(
+                    replacementAgentInitialCount
+                            + (replacementAgent.getId().equals(persistedReplacement.getId()) ? 1 : 0),
+                    agentRepository.findById(replacementAgent.getId()).orElseThrow().getActiveOrderCount());
+            org.junit.jupiter.api.Assertions.assertEquals(
+                    SuggestionStatus.ACCEPTED,
+                    suggestionRepository.findById(persistedSuggestion.getId()).orElseThrow().getStatus());
+        } finally {
+            routingEngine.switchStrategy(originalStrategy);
+        }
     }
 
     @Test

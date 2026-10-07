@@ -4,6 +4,8 @@ import java.util.List;
 import java.util.Objects;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -63,7 +65,7 @@ public class AiRoutingStrategy implements RoutingStrategy {
                 return fallback(order, availableAgents, triggerReason, "empty response");
             }
 
-            AIResponse aiResponse = objectMapper.readValue(response, AIResponse.class);
+            AIResponse aiResponse = parseResponse(response);
             Agent recommendedAgent = validateAndFindAgent(aiResponse, availableAgents);
             return List.of(new RoutingRecommendation(
                     recommendedAgent,
@@ -74,9 +76,30 @@ public class AiRoutingStrategy implements RoutingStrategy {
         }
     }
 
+    private AIResponse parseResponse(String response) throws JsonProcessingException {
+        JsonNode root = objectMapper.reader()
+                .with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+                .readTree(response);
+        if (root == null || !root.isObject()) {
+            throw new IllegalArgumentException("LLM response must be a JSON object");
+        }
+
+        JsonNode agentId = root.get("agentId");
+        JsonNode confidence = root.get("confidence");
+        JsonNode reasoning = root.get("reasoning");
+        if (agentId == null || !agentId.isTextual()
+                || confidence == null || !confidence.isNumber()
+                || reasoning == null || !reasoning.isTextual()) {
+            throw new IllegalArgumentException("LLM response is missing required fields or types");
+        }
+        return new AIResponse(agentId.textValue(), confidence.doubleValue(), reasoning.textValue());
+    }
+
     private Agent validateAndFindAgent(AIResponse response, List<Agent> availableAgents) {
         if (response == null
                 || response.agentId() == null
+                || response.agentId().isBlank()
+                || response.confidence() == null
                 || !Double.isFinite(response.confidence())
                 || response.confidence() < 0.0
                 || response.confidence() > 1.0

@@ -69,6 +69,43 @@ class AiRoutingStrategyTests {
     }
 
     @Test
+    void missingNullOrWronglyTypedRequiredFieldsFallBackToRuleBasedRouting() {
+        List<String> invalidResponses = List.of(
+                "{\"confidence\":0.8,\"reasoning\":\"Missing agent.\"}",
+                "{\"agentId\":null,\"confidence\":0.8,\"reasoning\":\"Null agent.\"}",
+                "{\"agentId\":\" \",\"confidence\":0.8,\"reasoning\":\"Blank agent.\"}",
+                "{\"agentId\":\"A2\",\"reasoning\":\"Missing confidence.\"}",
+                "{\"agentId\":\"A2\",\"confidence\":null,\"reasoning\":\"Null confidence.\"}",
+                "{\"agentId\":\"A2\",\"confidence\":\"0.8\",\"reasoning\":\"String confidence.\"}",
+                "{\"agentId\":\"A2\",\"confidence\":-0.1,\"reasoning\":\"Low confidence.\"}",
+                "{\"agentId\":\"A2\",\"confidence\":1.1,\"reasoning\":\"High confidence.\"}",
+                "{\"agentId\":\"A2\",\"confidence\":0.8}",
+                "{\"agentId\":\"A2\",\"confidence\":0.8,\"reasoning\":null}",
+                "{\"agentId\":\"A2\",\"confidence\":0.8,\"reasoning\":\" \"}",
+                "{\"agentId\":\"A2\",\"confidence\":0.8,\"reasoning\":\"Valid.\"} trailing data",
+                "[]");
+
+        for (String response : invalidResponses) {
+            assertFallsBack(response);
+        }
+    }
+
+    @Test
+    void confidenceBoundaryValuesRemainValid() {
+        for (double confidence : List.of(0.0, 1.0)) {
+            AiRoutingStrategy strategy = strategy(prompt -> """
+                    {"agentId":"A2","confidence":%s,"reasoning":"Valid boundary."}
+                    """.formatted(confidence));
+
+            List<RoutingRecommendation> recommendations =
+                    strategy.recommend(order, List.of(otherAgent, lowLoadAgent));
+
+            assertEquals(otherAgent, recommendations.get(0).agent());
+            assertEquals(confidence, recommendations.get(0).confidence());
+        }
+    }
+
+    @Test
     void emptyAvailableAgentListReturnsNoRecommendations() {
         AiRoutingStrategy strategy = strategy(prompt -> {
             throw new AssertionError("LLM must not be called without available agents");
