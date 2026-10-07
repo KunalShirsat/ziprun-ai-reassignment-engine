@@ -15,6 +15,7 @@ import com.ziprun.reassignment.dto.UpdateSuggestionStatusRequest;
 import com.ziprun.reassignment.entity.Agent;
 import com.ziprun.reassignment.entity.Order;
 import com.ziprun.reassignment.entity.OrderStatus;
+import com.ziprun.reassignment.entity.RecommendationSource;
 import com.ziprun.reassignment.entity.ReassignmentSuggestion;
 import com.ziprun.reassignment.entity.SuggestionStatus;
 import com.ziprun.reassignment.entity.TriggerReason;
@@ -71,7 +72,8 @@ public class SuggestionService {
             Agent recommendedAgent,
             double confidence,
             String reasoning,
-            TriggerReason triggerReason) {
+            TriggerReason triggerReason,
+            RecommendationSource recommendationSource) {
         Optional<SuggestionResponse> existingSuggestion =
                 findPendingSuggestion(order.getId(), triggerReason);
         if (existingSuggestion.isPresent()) {
@@ -85,6 +87,7 @@ public class SuggestionService {
         suggestion.setReasoning(reasoning);
         suggestion.setStatus(SuggestionStatus.PENDING);
         suggestion.setTriggerReason(triggerReason);
+        suggestion.setRecommendationSource(recommendationSource);
 
         return toResponse(suggestionRepository.save(suggestion));
     }
@@ -159,6 +162,7 @@ public class SuggestionService {
                 suggestion.getConfidence(),
                 suggestion.getReasoning(),
                 suggestion.getStatus(),
-                suggestion.getTriggerReason());
+                suggestion.getTriggerReason(),
+                suggestion.getRecommendationSource());
     }
 }

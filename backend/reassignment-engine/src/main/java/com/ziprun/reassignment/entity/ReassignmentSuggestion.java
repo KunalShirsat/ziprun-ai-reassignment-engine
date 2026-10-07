@@ -34,6 +34,9 @@ public class ReassignmentSuggestion {
     @Enumerated(EnumType.STRING)
     private TriggerReason triggerReason;
 
+    @Enumerated(EnumType.STRING)
+    private RecommendationSource recommendationSource;
+
     public ReassignmentSuggestion() {
     }
 
@@ -91,5 +94,13 @@ public class ReassignmentSuggestion {
 
     public void setTriggerReason(TriggerReason triggerReason) {
         this.triggerReason = triggerReason;
+    }
+
+    public RecommendationSource getRecommendationSource() {
+        return recommendationSource;
+    }
+
+    public void setRecommendationSource(RecommendationSource recommendationSource) {
+        this.recommendationSource = recommendationSource;
     }
 }

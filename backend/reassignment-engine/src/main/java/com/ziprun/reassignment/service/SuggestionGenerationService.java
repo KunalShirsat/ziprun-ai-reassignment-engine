@@ -54,6 +54,7 @@ public class SuggestionGenerationService {
         suggestion.setRecommendedAgent(recommendation.agent());
         suggestion.setConfidence(recommendation.confidence());
         suggestion.setReasoning(recommendation.reasoning());
+        suggestion.setRecommendationSource(recommendation.source());
         suggestion.setStatus(SuggestionStatus.PENDING);
         suggestionRepository.save(suggestion);
     }

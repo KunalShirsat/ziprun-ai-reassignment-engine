@@ -21,6 +21,7 @@ import com.ziprun.reassignment.entity.Agent;
 import com.ziprun.reassignment.entity.AgentStatus;
 import com.ziprun.reassignment.entity.Order;
 import com.ziprun.reassignment.entity.OrderStatus;
+import com.ziprun.reassignment.entity.RecommendationSource;
 import com.ziprun.reassignment.entity.SuggestionStatus;
 import com.ziprun.reassignment.entity.TriggerReason;
 import com.ziprun.reassignment.repository.AgentRepository;
@@ -66,7 +67,8 @@ class ReplanningServiceTests {
                 .thenReturn(Optional.empty());
         when(agentRepository.findByStatus(AgentStatus.AVAILABLE)).thenReturn(List.of(recommendedAgent));
         when(routingEngine.recommend(affectedOrder, List.of(recommendedAgent), TriggerReason.AGENT_OFFLINE))
-                .thenReturn(List.of(new RoutingRecommendation(recommendedAgent, 0.9, "best available")));
+                .thenReturn(List.of(new RoutingRecommendation(
+                        recommendedAgent, 0.9, "best available", RecommendationSource.AI)));
 
         replanningService.replanOrdersForOfflineAgent("offline-agent");
 
@@ -76,7 +78,8 @@ class ReplanningServiceTests {
                 recommendedAgent,
                 0.9,
                 "best available",
-                TriggerReason.AGENT_OFFLINE);
+                TriggerReason.AGENT_OFFLINE,
+                RecommendationSource.AI);
         assertEquals("offline-agent", affectedOrder.getAssignedAgent().getId());
         assertEquals(OrderStatus.ASSIGNED, affectedOrder.getStatus());
     }
@@ -94,7 +97,7 @@ class ReplanningServiceTests {
 
         verify(agentRepository, never()).findByStatus(any());
         verify(suggestionService, never()).createSuggestion(
-                any(), any(), any(double.class), any(), any());
+                any(), any(), any(double.class), any(), any(), any());
     }
 
     @Test
@@ -108,7 +111,7 @@ class ReplanningServiceTests {
         replanningService.replanOrdersForOfflineAgent("offline-agent");
 
         verify(suggestionService, never()).createSuggestion(
-                any(), any(), any(double.class), any(), any());
+                any(), any(), any(double.class), any(), any(), any());
     }
 
     @Test
@@ -124,14 +127,20 @@ class ReplanningServiceTests {
         when(suggestionService.findPendingSuggestion("order-2", TriggerReason.AGENT_OFFLINE))
                 .thenReturn(Optional.empty());
         when(routingEngine.recommend(secondOrder, List.of(recommendedAgent), TriggerReason.AGENT_OFFLINE))
-                .thenReturn(List.of(new RoutingRecommendation(recommendedAgent, 0.8, "next order")));
+                .thenReturn(List.of(new RoutingRecommendation(
+                        recommendedAgent, 0.8, "next order", RecommendationSource.RULE_BASED)));
 
         replanningService.replanOrdersForOfflineAgent("offline-agent");
 
         verify(suggestionService, never()).createSuggestion(
-                eq(affectedOrder), any(), any(double.class), any(), any());
+                eq(affectedOrder), any(), any(double.class), any(), any(), any());
         verify(suggestionService).createSuggestion(
-                secondOrder, recommendedAgent, 0.8, "next order", TriggerReason.AGENT_OFFLINE);
+                secondOrder,
+                recommendedAgent,
+                0.8,
+                "next order",
+                TriggerReason.AGENT_OFFLINE,
+                RecommendationSource.RULE_BASED);
     }
 
     @Test
@@ -143,7 +152,8 @@ class ReplanningServiceTests {
         when(agentRepository.findByStatus(AgentStatus.AVAILABLE)).thenReturn(List.of(recommendedAgent));
         when(routingEngine.recommend(
                 affectedOrder, List.of(recommendedAgent), TriggerReason.AGENT_OFFLINE))
-                .thenReturn(List.of(new RoutingRecommendation(recommendedAgent, 0.85, "offline re-plan")));
+                .thenReturn(List.of(new RoutingRecommendation(
+                        recommendedAgent, 0.85, "offline re-plan", RecommendationSource.RULE_BASED)));
 
         replanningService.replanOrdersForOfflineAgent("offline-agent");
 
@@ -155,7 +165,8 @@ class ReplanningServiceTests {
                 recommendedAgent,
                 0.85,
                 "offline re-plan",
-                TriggerReason.AGENT_OFFLINE);
+                TriggerReason.AGENT_OFFLINE,
+                RecommendationSource.RULE_BASED);
     }
 
     private Order order(String id, String assignedAgentId) {

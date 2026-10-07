@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 
 import com.ziprun.reassignment.entity.Agent;
 import com.ziprun.reassignment.entity.Order;
+import com.ziprun.reassignment.entity.RecommendationSource;
 import com.ziprun.reassignment.entity.TriggerReason;
 
 class RoutingEngineTests {
@@ -38,7 +39,7 @@ class RoutingEngineTests {
     void canSwitchStrategiesAtRuntimeAndSubsequentRoutingUsesCurrentStrategy() {
         Agent agent = agent("agent-1", 0);
         RoutingStrategy aiStrategy = (order, agents, triggerReason) ->
-                List.of(new RoutingRecommendation(agent, 0.7, "AI recommendation"));
+                List.of(new RoutingRecommendation(agent, 0.7, "AI recommendation", RecommendationSource.AI));
         RoutingEngine routingEngine = new RoutingEngine(
                 Map.of(
                         "ruleBased", new RuleBasedRoutingStrategy(),
@@ -75,7 +76,8 @@ class RoutingEngineTests {
         Agent agent = agent("agent-1", 0);
         RoutingStrategy strategy = (order, agents, triggerReason) -> {
             assertEquals(TriggerReason.AGENT_OFFLINE, triggerReason);
-            return List.of(new RoutingRecommendation(agent, 0.7, "offline"));
+            return List.of(new RoutingRecommendation(
+                    agent, 0.7, "offline", RecommendationSource.RULE_BASED));
         };
         RoutingEngine routingEngine = new RoutingEngine(Map.of("ai", strategy), "ai");
 

@@ -80,6 +80,7 @@ public class ReplanningService {
                 recommendation.agent(),
                 recommendation.confidence(),
                 recommendation.reasoning(),
-                TriggerReason.AGENT_OFFLINE);
+                TriggerReason.AGENT_OFFLINE,
+                recommendation.source());
     }
 }

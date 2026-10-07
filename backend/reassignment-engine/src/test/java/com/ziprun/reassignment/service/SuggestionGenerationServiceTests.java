@@ -22,6 +22,7 @@ import com.ziprun.reassignment.entity.Agent;
 import com.ziprun.reassignment.entity.AgentStatus;
 import com.ziprun.reassignment.entity.Order;
 import com.ziprun.reassignment.entity.OrderStatus;
+import com.ziprun.reassignment.entity.RecommendationSource;
 import com.ziprun.reassignment.entity.ReassignmentSuggestion;
 import com.ziprun.reassignment.entity.SuggestionStatus;
 import com.ziprun.reassignment.entity.TriggerReason;
@@ -76,7 +77,8 @@ class SuggestionGenerationServiceTests {
         when(agentRepository.findByStatus(AgentStatus.AVAILABLE)).thenReturn(List.of(recommendedAgent));
         when(routingEngine.recommend(
                 suggestion.getOrder(), List.of(recommendedAgent), TriggerReason.INITIAL))
-                .thenReturn(List.of(new RoutingRecommendation(recommendedAgent, 0.82, "AI-selected agent.")));
+                .thenReturn(List.of(new RoutingRecommendation(
+                        recommendedAgent, 0.82, "AI-selected agent.", RecommendationSource.AI)));
 
         generationService.generate(suggestion.getId());
 
@@ -84,6 +86,7 @@ class SuggestionGenerationServiceTests {
         assertEquals("A4", suggestion.getRecommendedAgent().getId());
         assertEquals(0.82, suggestion.getConfidence());
         assertEquals("AI-selected agent.", suggestion.getReasoning());
+        assertEquals(RecommendationSource.AI, suggestion.getRecommendationSource());
         verify(suggestionRepository).save(suggestion);
         assertSame(suggestion, suggestionRepository.findById(suggestion.getId()).orElseThrow());
     }
@@ -112,6 +115,7 @@ class SuggestionGenerationServiceTests {
 
         assertEquals(SuggestionStatus.PENDING, suggestion.getStatus());
         assertEquals("A4", suggestion.getRecommendedAgent().getId());
+        assertEquals(RecommendationSource.RULE_BASED_FALLBACK, suggestion.getRecommendationSource());
         org.junit.jupiter.api.Assertions.assertTrue(
                 suggestion.getReasoning().contains("Rule-based fallback was used"));
         verify(suggestionRepository).save(suggestion);

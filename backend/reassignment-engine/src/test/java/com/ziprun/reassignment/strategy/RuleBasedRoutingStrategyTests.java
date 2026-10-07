@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 
 import com.ziprun.reassignment.entity.Agent;
 import com.ziprun.reassignment.entity.Order;
+import com.ziprun.reassignment.entity.RecommendationSource;
 
 class RuleBasedRoutingStrategyTests {
 
@@ -33,6 +34,8 @@ class RuleBasedRoutingStrategyTests {
                 recommendations.stream().map(RoutingRecommendation::agent).toList());
         assertEquals(1.0, recommendations.get(0).confidence());
         assertTrue(recommendations.get(0).reasoning().contains("lowest active-order load"));
+        assertTrue(recommendations.stream()
+                .allMatch(recommendation -> recommendation.source() == RecommendationSource.RULE_BASED));
     }
 
     private Agent agent(String id, int activeOrderCount) {

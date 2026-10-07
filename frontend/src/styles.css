@@ -105,6 +105,11 @@ h2 { margin-bottom: 0; font: 700 20px Manrope, sans-serif; letter-spacing: -.35p
 .trigger-badge { padding: 7px 9px; font-size: 9px; }
 .trigger-initial { color: var(--blue); background: var(--blue-soft); }
 .trigger-offline { color: #a74d18; background: #ffeadc; }
+.recommendation-source { width: fit-content; margin-top: 12px; padding: 6px 9px; border-radius: 999px; color: #58667a; background: #f0f3f7; font-size: 9px; font-weight: 600; letter-spacing: .2px; }
+.recommendation-source strong { margin-left: 3px; }
+.source-ai { color: #2854aa; background: var(--blue-soft); }
+.source-rule_based { color: #526177; background: #eef1f5; }
+.source-rule_based_fallback { color: #a74d18; background: #ffeadc; }
 .recommendation { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 20px; padding: 15px; border-radius: 10px; background: #f7f9fc; }
 .recommendation > div:first-child { display: grid; gap: 4px; }
 .detail-label { color: #8490a2; font-size: 10px; font-weight: 600; }

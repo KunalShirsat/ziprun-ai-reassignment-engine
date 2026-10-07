@@ -8,6 +8,7 @@ import org.springframework.stereotype.Component;
 
 import com.ziprun.reassignment.entity.Agent;
 import com.ziprun.reassignment.entity.Order;
+import com.ziprun.reassignment.entity.RecommendationSource;
 import com.ziprun.reassignment.entity.TriggerReason;
 
 @Component("ruleBased")
@@ -32,7 +33,8 @@ public class RuleBasedRoutingStrategy implements RoutingStrategy {
                                     + " is next in the recommendation order with an active-order load of "
                                     + agent.getActiveOrderCount() + ".";
                     double confidence = index == 0 ? 1.0 : 1.0 / (index + 1);
-                    return new RoutingRecommendation(agent, confidence, reasoning);
+                    return new RoutingRecommendation(
+                            agent, confidence, reasoning, RecommendationSource.RULE_BASED);
                 })
                 .toList();
     }

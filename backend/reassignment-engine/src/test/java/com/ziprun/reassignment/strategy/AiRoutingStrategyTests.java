@@ -17,6 +17,7 @@ import com.ziprun.reassignment.ai.LLMGateway;
 import com.ziprun.reassignment.ai.PromptBuilder;
 import com.ziprun.reassignment.entity.Agent;
 import com.ziprun.reassignment.entity.Order;
+import com.ziprun.reassignment.entity.RecommendationSource;
 import com.ziprun.reassignment.entity.TriggerReason;
 
 class AiRoutingStrategyTests {
@@ -38,6 +39,7 @@ class AiRoutingStrategyTests {
         assertEquals(otherAgent, recommendations.get(0).agent());
         assertEquals(0.87, recommendations.get(0).confidence());
         assertEquals("A2 is suitable for this order.", recommendations.get(0).reasoning());
+        assertEquals(RecommendationSource.AI, recommendations.get(0).source());
     }
 
     @Test
@@ -163,6 +165,7 @@ class AiRoutingStrategyTests {
     private void assertFallbackRecommendations(List<RoutingRecommendation> recommendations) {
         assertEquals(2, recommendations.size());
         assertEquals(lowLoadAgent, recommendations.get(0).agent());
+        assertEquals(RecommendationSource.RULE_BASED_FALLBACK, recommendations.get(0).source());
         assertTrue(recommendations.get(0).reasoning().contains("Rule-based fallback was used"));
     }
 

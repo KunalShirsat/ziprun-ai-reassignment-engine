@@ -16,6 +16,7 @@ import com.ziprun.reassignment.ai.LLMGateway;
 import com.ziprun.reassignment.ai.PromptBuilder;
 import com.ziprun.reassignment.entity.Agent;
 import com.ziprun.reassignment.entity.Order;
+import com.ziprun.reassignment.entity.RecommendationSource;
 import com.ziprun.reassignment.entity.TriggerReason;
 
 @Component("ai")
@@ -70,7 +71,8 @@ public class AiRoutingStrategy implements RoutingStrategy {
             return List.of(new RoutingRecommendation(
                     recommendedAgent,
                     aiResponse.confidence(),
-                    aiResponse.reasoning()));
+                    aiResponse.reasoning(),
+                    RecommendationSource.AI));
         } catch (JsonProcessingException | RuntimeException exception) {
             return fallback(order, availableAgents, triggerReason, exception.getClass().getSimpleName());
         }
@@ -129,7 +131,8 @@ public class AiRoutingStrategy implements RoutingStrategy {
                         recommendation.agent(),
                         recommendation.confidence(),
                         "Rule-based fallback was used because the AI recommendation was unavailable or invalid. "
-                                + recommendation.reasoning()))
+                                + recommendation.reasoning(),
+                        RecommendationSource.RULE_BASED_FALLBACK))
                 .toList();
     }
 }

@@ -23,6 +23,7 @@ import com.ziprun.reassignment.entity.Agent;
 import com.ziprun.reassignment.entity.AgentStatus;
 import com.ziprun.reassignment.entity.Order;
 import com.ziprun.reassignment.entity.OrderStatus;
+import com.ziprun.reassignment.entity.RecommendationSource;
 import com.ziprun.reassignment.entity.ReassignmentSuggestion;
 import com.ziprun.reassignment.entity.SuggestionStatus;
 import com.ziprun.reassignment.entity.TriggerReason;
@@ -237,11 +238,38 @@ class BackendReadinessIntegrationTests {
                 org.junit.jupiter.api.Assertions.assertEquals("A5", generated.getRecommendedAgent().getId());
                 org.junit.jupiter.api.Assertions.assertEquals(0.84, generated.getConfidence());
                 org.junit.jupiter.api.Assertions.assertEquals("Mock AI recommendation.", generated.getReasoning());
+                org.junit.jupiter.api.Assertions.assertEquals(
+                        RecommendationSource.AI, generated.getRecommendationSource());
             });
+            JsonNode suggestionList = objectMapper.readTree(send("GET", "/suggestions", null).body());
+            JsonNode generatedDto = java.util.stream.StreamSupport.stream(
+                            suggestionList.spliterator(), false)
+                    .filter(item -> suggestionId.toString().equals(item.path("id").asText()))
+                    .findFirst()
+                    .orElseThrow();
+            org.junit.jupiter.api.Assertions.assertEquals(
+                    "AI", generatedDto.path("recommendationSource").asText());
             org.junit.jupiter.api.Assertions.assertTrue(suggestionRepository.findById(suggestionId).isPresent());
         } finally {
             releaseLlm.countDown();
             routingEngine.switchStrategy("ruleBased");
+        }
+    }
+
+    @Test
+    void suggestionApiDistinguishesRuleBasedAndAiFallbackSources() throws Exception {
+        String originalStrategy = routingEngine.getActiveStrategyName();
+        try {
+            routingEngine.switchStrategy("ruleBased");
+            assertInitialSuggestionSource("IT-SOURCE-RULE-BASED", "RULE_BASED");
+
+            when(llmGateway.generate(anyString())).thenReturn("""
+                    {"agentId":"NOT-AVAILABLE","confidence":0.8,"reasoning":"Invalid candidate."}
+                    """);
+            routingEngine.switchStrategy("ai");
+            assertInitialSuggestionSource("IT-SOURCE-AI-FALLBACK", "RULE_BASED_FALLBACK");
+        } finally {
+            routingEngine.switchStrategy(originalStrategy);
         }
     }
 
@@ -321,6 +349,8 @@ class BackendReadinessIntegrationTests {
             Agent persistedReplacement = persistedSuggestion.getRecommendedAgent();
             org.junit.jupiter.api.Assertions.assertEquals(TriggerReason.AGENT_OFFLINE,
                     persistedSuggestion.getTriggerReason());
+            org.junit.jupiter.api.Assertions.assertEquals(
+                    RecommendationSource.AI, persistedSuggestion.getRecommendationSource());
             org.junit.jupiter.api.Assertions.assertEquals(SuggestionStatus.PENDING,
                     persistedSuggestion.getStatus());
             org.junit.jupiter.api.Assertions.assertEquals(affectedOrderId,
@@ -342,6 +372,9 @@ class BackendReadinessIntegrationTests {
             org.junit.jupiter.api.Assertions.assertEquals(
                     "ACCEPTED",
                     objectMapper.readTree(acceptResponse.body()).path("status").asText());
+            org.junit.jupiter.api.Assertions.assertEquals(
+                    "AI",
+                    objectMapper.readTree(acceptResponse.body()).path("recommendationSource").asText());
 
             Order reassignedOrder = orderRepository.findById(affectedOrderId).orElseThrow();
             org.junit.jupiter.api.Assertions.assertEquals(OrderStatus.REASSIGNED, reassignedOrder.getStatus());
@@ -555,6 +588,32 @@ class BackendReadinessIntegrationTests {
                     .method(method, HttpRequest.BodyPublishers.ofString(body));
         }
         return httpClient.send(request.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private void assertInitialSuggestionSource(String orderId, String expectedSource) throws Exception {
+        Order order = order(orderId, agentRepository.findById("A1").orElseThrow());
+        orderRepository.save(order);
+
+        HttpResponse<String> createResponse = send("POST", "/orders/" + orderId + "/suggest", null);
+        org.junit.jupiter.api.Assertions.assertEquals(202, createResponse.statusCode());
+        java.util.UUID suggestionId = java.util.UUID.fromString(
+                objectMapper.readTree(createResponse.body()).path("id").asText());
+
+        Awaitility.await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+            ReassignmentSuggestion suggestion = suggestionRepository.findById(suggestionId).orElseThrow();
+            org.junit.jupiter.api.Assertions.assertEquals(SuggestionStatus.PENDING, suggestion.getStatus());
+            org.junit.jupiter.api.Assertions.assertEquals(expectedSource, suggestion.getRecommendationSource().name());
+        });
+
+        JsonNode suggestions = objectMapper.readTree(send("GET", "/suggestions", null).body());
+        JsonNode suggestionResponse = java.util.stream.StreamSupport.stream(
+                        suggestions.spliterator(), false)
+                .filter(item -> suggestionId.toString().equals(item.path("id").asText()))
+                .findFirst()
+                .orElseThrow();
+        org.junit.jupiter.api.Assertions.assertEquals(
+                expectedSource,
+                suggestionResponse.path("recommendationSource").asText());
     }
 
     private Agent agent(String id, AgentStatus status) {

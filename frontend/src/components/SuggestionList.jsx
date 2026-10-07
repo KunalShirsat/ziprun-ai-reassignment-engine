@@ -2,6 +2,19 @@ function triggerLabel(triggerReason) {
   return triggerReason === "AGENT_OFFLINE" ? "AGENT OFFLINE" : triggerReason;
 }
 
+function sourceLabel(source) {
+  switch (source) {
+    case "AI":
+      return "AI";
+    case "RULE_BASED":
+      return "RULE-BASED";
+    case "RULE_BASED_FALLBACK":
+      return "RULE-BASED FALLBACK";
+    default:
+      return "SOURCE PENDING";
+  }
+}
+
 export default function SuggestionList({ suggestions, onDecision, busyKey }) {
   if (!suggestions.length) {
     return (
@@ -31,6 +44,9 @@ export default function SuggestionList({ suggestions, onDecision, busyKey }) {
               <span className={`trigger-badge ${suggestion.triggerReason === "AGENT_OFFLINE" ? "trigger-offline" : "trigger-initial"}`}>
                 {triggerLabel(suggestion.triggerReason)}
               </span>
+            </div>
+            <div className={`recommendation-source source-${(suggestion.recommendationSource || "pending").toLowerCase()}`}>
+              Recommendation source: <strong>{sourceLabel(suggestion.recommendationSource)}</strong>
             </div>
             {isProcessing ? (
               <div className="generation-state" role="status">
