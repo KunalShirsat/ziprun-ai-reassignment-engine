@@ -1,0 +1,9 @@
+.idea/
+.vscode/
+.env
+.env.*
+!.env.example
+frontend/node_modules/
+frontend/dist/
+backend/reassignment-engine/target/
+package-lock.json
